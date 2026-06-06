@@ -6,10 +6,10 @@ import requests
 # 1. Configurações da Página (Visual Mobile)
 st.set_page_config(page_title="BusGuard - Ocorrências", page_icon="🚌", layout="centered")
 
-# --- CREDENCIAIS DO SEU PROJETO ---
-SUPABASE_URL = "https://arzogujddgulqdepqxbi.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFyem9ndWpkZGd1bHFkZXBxeGJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA3Mjg5ODYsImV4cCI6MjA5NjMwNDk4Nn0.yEbFFFZ7M_AytZTwXmGQkU--sHe8Wr7szLtYH5irFnM"
-# ----------------------------------
+# --- CREDENCIAIS PROTEGIDAS (Lendo do cofre seguro do Streamlit) ---
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+# -------------------------------------------------------------------
 
 # Conectando ao banco de dados (Necessário para manter a estrutura do cliente ativa)
 @st.cache_resource
