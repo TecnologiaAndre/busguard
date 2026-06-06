@@ -18,7 +18,7 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
-# 2. Buscando os veículos cadastrados DIRETO via API HTTP (Evita bugs da biblioteca)
+# 2. Buscando os veículos cadastrados DIRETO via API HTTP
 lista_onibus = []
 try:
     url_veiculos = f"{SUPABASE_URL}/rest/v1/veiculos?select=prefixo"
@@ -34,6 +34,29 @@ try:
 except Exception:
     lista_onibus = []
 
+# --- NOVO: Buscando os Tipos de Ocorrência DIRETO da tabela do Supabase ---
+lista_tipos = []
+try:
+    # IMPORTANTE: Mude o nome 'tipo_ocorrencia' abaixo se a sua tabela tiver outro nome no Supabase
+    # E substitua 'nome' pela coluna que guarda o texto da ocorrência (ex: 'descricao', 'titulo')
+    url_tipos = f"{SUPABASE_URL}/rest/v1/ocorrenciaS?select=nome"
+    headers_tipos = {
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": SUPABASE_KEY
+    }
+    response_tipos = requests.get(url_tipos, headers=headers_tipos)
+    
+    if response_tipos.status_code == 200:
+        dados_tipos = response_tipos.json()
+        lista_tipos = [row["nome"] for row in dados_tipos]
+except Exception:
+    lista_tipos = []
+
+# Se a tabela do banco estiver vazia ou falhar, usa esta lista padrão para o app não quebrar:
+if not lista_tipos:
+    lista_tipos = ["Mecânica", "Batida/Sinistro", "Limpeza/Conservação", "Vandalismo", "Outros"]
+# -------------------------------------------------------------------------
+
 # 3. Interface Visual
 st.title("🚌 BusGuard")
 st.subheader("Registro de Ocorrências da Frota")
@@ -47,9 +70,10 @@ with st.form("form_ocorrencia", clear_on_submit=True):
     else:
         prefixo = st.text_input("Digite o Ônibus (Prefixo)", placeholder="Ex: 40012")
         
+    # Agora as opções vêm direto da variável dinamica 'lista_tipos'
     tipo = st.selectbox(
         "Tipo de Ocorrência", 
-        options=["Mecânica", "Batida/Sinistro", "Limpeza/Conservação", "Vandalismo", "Outros"]
+        options=lista_tipos
     )
     
     descricao = st.text_area("Descrição Detalhada do Problema", placeholder="Descreva o que aconteceu...")
