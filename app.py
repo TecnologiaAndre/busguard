@@ -39,7 +39,7 @@ lista_tipos = []
 try:
     # IMPORTANTE: Mude o nome 'tipo_ocorrencia' abaixo se a sua tabela tiver outro nome no Supabase
     # E substitua 'nome' pela coluna que guarda o texto da ocorrência (ex: 'descricao', 'titulo')
-    url_tipos = f"{SUPABASE_URL}/rest/v1/ocorrenciaS?select=nome"
+    url_tipos = f"{SUPABASE_URL}/rest/v1/tipo_ocorrencia?select=nome"
     headers_tipos = {
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "apikey": SUPABASE_KEY
