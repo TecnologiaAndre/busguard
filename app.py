@@ -43,7 +43,6 @@ if not st.session_state.logado:
         else:
             with st.spinner("Autenticando..."):
                 try:
-                    # Faz um filtro na tabela 'cadastro_login' buscando exatamente a combinação informada
                     url_login = f"{SUPABASE_URL}/rest/v1/cadastro_login?matricula=eq.{input_matricula}&cpf=eq.{input_cpf}&select=*"
                     headers_login = {
                         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -54,12 +53,11 @@ if not st.session_state.logado:
                     if response_login.status_code == 200:
                         resultado = response_login.json()
                         
-                        # Se retornou uma linha, significa que o usuário existe e os dados estão certos
                         if len(resultado) > 0:
                             st.session_state.logado = True
                             st.session_state.matricula_usuario = input_matricula
                             st.success("✅ Login efetuado com sucesso!")
-                            st.rerun()  # Atualiza a página para abrir o app
+                            st.rerun()
                         else:
                             st.error("❌ Matrícula ou CPF incorretos. Tente novamente.")
                     else:
@@ -67,18 +65,17 @@ if not st.session_state.logado:
                 except Exception as e:
                     st.error(f"❌ Erro crítico no login: {e}")
                     
-    st.stop()  # Trava a execução aqui se não estiver logado, impedindo de ver o código abaixo
+    st.stop()
 
 # =========================================================================
 # TELA PRINCIPAL (APLICATIVO LIBERADO APÓS LOGIN)
 # =========================================================================
 
-# Botão discreto no topo para sair do sistema se necessário
 col_titulo, col_sair = st.columns([4, 1])
 with col_titulo:
     st.title("🚌 BusGuard")
 with col_sair:
-    st.markdown("<br>", unsafe_allow_html=True) # Alinha o botão visualmente
+    st.markdown("<br>", unsafe_allow_html=True)
     if st.button("Sair 🚪"):
         st.session_state.logado = False
         st.session_state.matricula_usuario = ""
@@ -145,13 +142,33 @@ if botao_enviar:
     if not prefixo or not descricao or not foto_arquivo:
         st.error("❌ Por favor, preencha todos os campos e tire a foto antes de enviar!")
     else:
-        with st.spinner("Enviando dados e imagem... Por favor, aguarde."):
+        with st.spinner("Processando e enviando dados... Por favor, aguarde."):
             try:
+                # ---------------------------------------------------------------------------------
+                # --- NOVO NO FLUXO: Cruzando a matrícula com a tabela 'motoristas' ---
+                # ---------------------------------------------------------------------------------
+                nome_registrador = f"Matrícula {st.session_state.matricula_usuario}" # Valor padrão caso a tabela falhe
+                
+                url_motorista = f"{SUPABASE_URL}/rest/v1/motoristas?matricula=eq.{st.session_state.matricula_usuario}&select=nome"
+                headers_motorista = {
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "apikey": SUPABASE_KEY
+                }
+                response_motorista = requests.get(url_motorista, headers=headers_motorista)
+                
+                if response_motorista.status_code == 200:
+                    dados_motorista = response_motorista.json()
+                    if len(dados_motorista) > 0:
+                        # Achou o motorista! Armazena o nome dele para salvar na ocorrência
+                        nome_registrador = dados_motorista[0]["nome"]
+                # ---------------------------------------------------------------------------------
+
+                # A. Preparando nome único do arquivo para a foto
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 nome_do_arquivo = f"{prefixo}_{timestamp}.jpg"
                 bytes_da_foto = foto_arquivo.getvalue()
                 
-                # Upload da Foto via HTTP POST (Storage)
+                # B. Upload da Foto via HTTP POST (Storage)
                 url_upload = f"{SUPABASE_URL}/storage/v1/object/fotos-ocorrencias/{nome_do_arquivo}"
                 headers_upload = {
                     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -168,7 +185,7 @@ if botao_enviar:
 
                 url_da_foto = f"{SUPABASE_URL}/storage/v1/object/public/fotos-ocorrencias/{nome_do_arquivo}"
                 
-                # Salva os dados na Tabela 'ocorrencias'
+                # C. Salva os dados na Tabela 'ocorrencias'
                 url_tabela = f"{SUPABASE_URL}/rest/v1/ocorrencias"
                 headers_tabela = {
                     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -177,12 +194,13 @@ if botao_enviar:
                     "Prefer": "return=minimal"
                 }
                 
-                # DICA: Se quiser salvar quem enviou, adicione o campo de matrícula na tabela 'ocorrencias' futuramente
+                # Monta o JSON enviando o NOME do motorista capturado no cruzamento
                 dados_ocorrencia = {
                     "prefixo_veiculo": str(prefixo), 
                     "tipo": tipo,
                     "descricao": descricao,
-                    "foto_url": url_da_foto
+                    "foto_url": url_da_foto,
+                    "registrador": str(nome_registrador) # Agora grava o NOME em vez da matrícula pura
                 }
                 
                 response_tabela = requests.post(url_tabela, headers=headers_tabela, json=dados_ocorrencia)
@@ -192,7 +210,7 @@ if botao_enviar:
                     st.json(response_tabela.json() if response_tabela.text else {"detalhe": response_tabela.text})
                     st.stop()
                 
-                st.success("✅ Ocorrência registrada com sucesso no sistema!")
+                st.success(f"✅ Ocorrência registrada com sucesso por {nome_registrador}!")
                 st.balloons()
                 
             except Exception as e:
