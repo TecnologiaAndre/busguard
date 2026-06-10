@@ -4,7 +4,7 @@ import datetime
 import requests
 
 # 1. Configurações da Página (Visual Mobile)
-st.set_page_config(page_title="BusGuard - Ocorrências", page_icon="🚌", layout="centered")
+st.set_page_config(page_title="Ocorrências Em Trânsito", page_icon="🚌", layout="centered")
 
 # --- CREDENCIAIS PROTEGIDAS (Lendo do cofre seguro do Streamlit) ---
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -28,7 +28,7 @@ if "matricula_usuario" not in st.session_state:
 # TELA DE LOGIN
 # =========================================================================
 if not st.session_state.logado:
-    st.title("🔐 BusGuard - Acesso")
+    st.title("🔐 Ocorrências Em Trânsito - Acesso")
     st.subheader("Identifique-se para acessar o sistema")
     st.markdown("---")
     
@@ -73,7 +73,7 @@ if not st.session_state.logado:
 
 col_titulo, col_sair = st.columns([4, 1])
 with col_titulo:
-    st.title("🚌 BusGuard")
+    st.title("🚌 Ocorrências Em Trânsito")
 with col_sair:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("Sair 🚪"):
