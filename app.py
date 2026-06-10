@@ -18,6 +18,76 @@ def init_supabase():
 
 supabase: Client = init_supabase()
 
+# --- CONTROLE DE SESSÃO (LOGIN) ---
+if "logado" not in st.session_state:
+    st.session_state.logado = False
+if "matricula_usuario" not in st.session_state:
+    st.session_state.matricula_usuario = ""
+
+# =========================================================================
+# TELA DE LOGIN
+# =========================================================================
+if not st.session_state.logado:
+    st.title("🔐 BusGuard - Acesso")
+    st.subheader("Identifique-se para acessar o sistema")
+    st.markdown("---")
+    
+    with st.form("form_login"):
+        input_matricula = st.text_input("Matrícula", placeholder="Digite sua matrícula")
+        input_cpf = st.text_input("CPF (Apenas números)", type="password", placeholder="Digite seu CPF")
+        botao_login = st.form_submit_button("Entrar", use_container_width=True)
+        
+    if botao_login:
+        if not input_matricula or not input_cpf:
+            st.error("❌ Por favor, preencha a matrícula e o CPF!")
+        else:
+            with st.spinner("Autenticando..."):
+                try:
+                    # Faz um filtro na tabela 'cadastro_login' buscando exatamente a combinação informada
+                    url_login = f"{SUPABASE_URL}/rest/v1/cadastro_login?matricula=eq.{input_matricula}&cpf=eq.{input_cpf}&select=*"
+                    headers_login = {
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                        "apikey": SUPABASE_KEY
+                    }
+                    response_login = requests.get(url_login, headers=headers_login)
+                    
+                    if response_login.status_code == 200:
+                        resultado = response_login.json()
+                        
+                        # Se retornou uma linha, significa que o usuário existe e os dados estão certos
+                        if len(resultado) > 0:
+                            st.session_state.logado = True
+                            st.session_state.matricula_usuario = input_matricula
+                            st.success("✅ Login efetuado com sucesso!")
+                            st.rerun()  # Atualiza a página para abrir o app
+                        else:
+                            st.error("❌ Matrícula ou CPF incorretos. Tente novamente.")
+                    else:
+                        st.error(f"❌ Erro de comunicação com o banco (Código {response_login.status_code})")
+                except Exception as e:
+                    st.error(f"❌ Erro crítico no login: {e}")
+                    
+    st.stop()  # Trava a execução aqui se não estiver logado, impedindo de ver o código abaixo
+
+# =========================================================================
+# TELA PRINCIPAL (APLICATIVO LIBERADO APÓS LOGIN)
+# =========================================================================
+
+# Botão discreto no topo para sair do sistema se necessário
+col_titulo, col_sair = st.columns([4, 1])
+with col_titulo:
+    st.title("🚌 BusGuard")
+with col_sair:
+    st.markdown("<br>", unsafe_allow_html=True) # Alinha o botão visualmente
+    if st.button("Sair 🚪"):
+        st.session_state.logado = False
+        st.session_state.matricula_usuario = ""
+        st.rerun()
+
+st.subheader(f"Registro de Ocorrências da Frota")
+st.caption(f"Operador logado: Matrícula {st.session_state.matricula_usuario}")
+st.markdown("---")
+
 # 2. Buscando os veículos cadastrados DIRETO via API HTTP
 lista_onibus = []
 try:
@@ -34,11 +104,9 @@ try:
 except Exception:
     lista_onibus = []
 
-# --- NOVO: Buscando os Tipos de Ocorrência DIRETO da tabela do Supabase ---
+# --- Buscando os Tipos de Ocorrência DIRETO da tabela do Supabase ---
 lista_tipos = []
 try:
-    # IMPORTANTE: Mude o nome 'tipo_ocorrencia' abaixo se a sua tabela tiver outro nome no Supabase
-    # E substitua 'nome' pela coluna que guarda o texto da ocorrência (ex: 'descricao', 'titulo')
     url_tipos = f"{SUPABASE_URL}/rest/v1/tipo_ocorrencia?select=nome"
     headers_tipos = {
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -52,17 +120,10 @@ try:
 except Exception:
     lista_tipos = []
 
-# Se a tabela do banco estiver vazia ou falhar, usa esta lista padrão para o app não quebrar:
 if not lista_tipos:
     lista_tipos = ["Mecânica", "Batida/Sinistro", "Limpeza/Conservação", "Vandalismo", "Outros"]
-# -------------------------------------------------------------------------
 
-# 3. Interface Visual
-st.title("🚌 BusGuard")
-st.subheader("Registro de Ocorrências da Frota")
-st.markdown("---")
-
-# Formulário
+# Formulário de Ocorrências
 with st.form("form_ocorrencia", clear_on_submit=True):
     
     if lista_onibus:
@@ -70,7 +131,6 @@ with st.form("form_ocorrencia", clear_on_submit=True):
     else:
         prefixo = st.text_input("Digite o Ônibus (Prefixo)", placeholder="Ex: 40012")
         
-    # Agora as opções vêm direto da variável dinamica 'lista_tipos'
     tipo = st.selectbox(
         "Tipo de Ocorrência", 
         options=lista_tipos
@@ -80,19 +140,18 @@ with st.form("form_ocorrencia", clear_on_submit=True):
     foto_arquivo = st.camera_input("📸 Tire a foto da ocorrência")
     botao_enviar = st.form_submit_button("💾 Registrar Ocorrência", use_container_width=True)
 
-# 4. Lógica de Envio Manual via API (Blindado contra erros de sintaxe e rotas)
+# 4. Lógica de Envio Manual via API
 if botao_enviar:
     if not prefixo or not descricao or not foto_arquivo:
         st.error("❌ Por favor, preencha todos os campos e tire a foto antes de enviar!")
     else:
         with st.spinner("Enviando dados e imagem... Por favor, aguarde."):
             try:
-                # A. Preparando nome único do arquivo para a foto
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 nome_do_arquivo = f"{prefixo}_{timestamp}.jpg"
                 bytes_da_foto = foto_arquivo.getvalue()
                 
-                # B. Upload da Foto via HTTP POST (Storage)
+                # Upload da Foto via HTTP POST (Storage)
                 url_upload = f"{SUPABASE_URL}/storage/v1/object/fotos-ocorrencias/{nome_do_arquivo}"
                 headers_upload = {
                     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -107,10 +166,9 @@ if botao_enviar:
                     st.json(response_api.json())
                     st.stop()
 
-                # C. Gera a URL pública da foto
                 url_da_foto = f"{SUPABASE_URL}/storage/v1/object/public/fotos-ocorrencias/{nome_do_arquivo}"
                 
-                # D. Salva os dados na Tabela 'ocorrencias' via HTTP POST direto
+                # Salva os dados na Tabela 'ocorrencias'
                 url_tabela = f"{SUPABASE_URL}/rest/v1/ocorrencias"
                 headers_tabela = {
                     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -119,6 +177,7 @@ if botao_enviar:
                     "Prefer": "return=minimal"
                 }
                 
+                # DICA: Se quiser salvar quem enviou, adicione o campo de matrícula na tabela 'ocorrencias' futuramente
                 dados_ocorrencia = {
                     "prefixo_veiculo": str(prefixo), 
                     "tipo": tipo,
