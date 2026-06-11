@@ -98,8 +98,8 @@ with col_sair:
         st.rerun()
 
 st.subheader(f"Registro de Ocorrências da Frota")
-# MODIFICADO AQUI: Agora exibe o NOME do motorista logado de forma elegante
-st.markdown(f"👤 **Motorista Logado:** {st.session_state.nome_motorista} *(Matrícula: {st.session_state.matricula_usuario})*")
+# MODIFICADO AQUI: Agora mostra estritamente apenas o Nome do motorista logado
+st.markdown(f"👤 **Motorista Logado:** {st.session_state.nome_motorista}")
 st.markdown("---")
 
 # 2. Buscando os veículos cadastrados DIRETO via API HTTP
