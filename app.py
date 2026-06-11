@@ -23,6 +23,8 @@ if "logado" not in st.session_state:
     st.session_state.logado = False
 if "matricula_usuario" not in st.session_state:
     st.session_state.matricula_usuario = ""
+if "nome_motorista" not in st.session_state:
+    st.session_state.nome_motorista = ""
 
 # =========================================================================
 # TELA DE LOGIN
@@ -54,8 +56,21 @@ if not st.session_state.logado:
                         resultado = response_login.json()
                         
                         if len(resultado) > 0:
+                            # Login básico aceito! Agora busca o nome real na tabela 'motoristas' antes de liberar o painel
+                            nome_encontrado = f"Matrícula {input_matricula}" # Caso não ache na tabela motoristas
+                            
+                            url_motorista_login = f"{SUPABASE_URL}/rest/v1/motoristas?matricula=eq.{input_matricula}&select=nome"
+                            response_mot = requests.get(url_motorista_login, headers=headers_login)
+                            if response_mot.status_code == 200:
+                                dados_mot = response_mot.json()
+                                if len(dados_mot) > 0:
+                                    nome_encontrado = dados_mot[0]["nome"]
+                            
+                            # Grava as variáveis na sessão
                             st.session_state.logado = True
                             st.session_state.matricula_usuario = input_matricula
+                            st.session_state.nome_motorista = nome_encontrado
+                            
                             st.success("✅ Login efetuado com sucesso!")
                             st.rerun()
                         else:
@@ -79,10 +94,12 @@ with col_sair:
     if st.button("Sair 🚪"):
         st.session_state.logado = False
         st.session_state.matricula_usuario = ""
+        st.session_state.nome_motorista = ""
         st.rerun()
 
 st.subheader(f"Registro de Ocorrências da Frota")
-st.caption(f"Operador logado: Matrícula {st.session_state.matricula_usuario}")
+# MODIFICADO AQUI: Agora exibe o NOME do motorista logado de forma elegante
+st.markdown(f"👤 **Motorista Logado:** {st.session_state.nome_motorista} *(Matrícula: {st.session_state.matricula_usuario})*")
 st.markdown("---")
 
 # 2. Buscando os veículos cadastrados DIRETO via API HTTP
@@ -144,24 +161,8 @@ if botao_enviar:
     else:
         with st.spinner("Processando e enviando dados... Por favor, aguarde."):
             try:
-                # ---------------------------------------------------------------------------------
-                # --- NOVO NO FLUXO: Cruzando a matrícula com a tabela 'motoristas' ---
-                # ---------------------------------------------------------------------------------
-                nome_registrador = f"Matrícula {st.session_state.matricula_usuario}" # Valor padrão caso a tabela falhe
-                
-                url_motorista = f"{SUPABASE_URL}/rest/v1/motoristas?matricula=eq.{st.session_state.matricula_usuario}&select=nome"
-                headers_motorista = {
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "apikey": SUPABASE_KEY
-                }
-                response_motorista = requests.get(url_motorista, headers=headers_motorista)
-                
-                if response_motorista.status_code == 200:
-                    dados_motorista = response_motorista.json()
-                    if len(dados_motorista) > 0:
-                        # Achou o motorista! Armazena o nome dele para salvar na ocorrência
-                        nome_registrador = dados_motorista[0]["nome"]
-                # ---------------------------------------------------------------------------------
+                # O nome do registrador agora já vem direto da sessão coletada no login
+                nome_registrador = st.session_state.nome_motorista
 
                 # A. Preparando nome único do arquivo para a foto
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -200,7 +201,7 @@ if botao_enviar:
                     "tipo": tipo,
                     "descricao": descricao,
                     "foto_url": url_da_foto,
-                    "registrador": str(nome_registrador) # Agora grava o NOME em vez da matrícula pura
+                    "registrador": str(nome_registrador) # Grava o nome completo capturado na ocorrência
                 }
                 
                 response_tabela = requests.post(url_tabela, headers=headers_tabela, json=dados_ocorrencia)
