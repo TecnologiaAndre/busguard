@@ -20,22 +20,11 @@ if "nome_operador" not in st.session_state:
 # TELA DE LOGIN DO OPERADOR (VALIDANDO NO BANCO DE DADOS)
 # =========================================================================
 if not st.session_state.operador_logado:
-    st.title("🖥️ Centro de Controle BusGuard")
-    st.subheader("Área Restrita para Operadores e Tratamento de Dados")
-    st.markdown("---")
-    
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        with st.form("login_operador"):
-            usuario = st.text_input("Usuário / Matrícula")
-            senha = st.text_input("Senha de Acesso", type="password")
-            botao_entrar = st.form_submit_button("Acessar Painel", use_container_width=True)
-            
-        if botao_entrar:
+    if botao_entrar:
             if usuario and senha:
                 try:
-                    # Faz a busca na tabela 'operadores' filtrando por usuário, senha e se está ativo
-                    url_login = f"{SUPABASE_URL}/rest/v1/operadores?usuario=eq.{usuario}&senha=eq.{senha}&ativo=eq.true&select=nome"
+                    # Buscamos apenas pelo usuário (ignorando maiúsculas/minúsculas com ilike)
+                    url_login = f"{SUPABASE_URL}/rest/v1/operadores?usuario=ilike.{usuario.strip()}&select=*"
                     headers_login = {
                         "Authorization": f"Bearer {SUPABASE_KEY}",
                         "apikey": SUPABASE_KEY
@@ -45,17 +34,31 @@ if not st.session_state.operador_logado:
                     if response_login.status_code == 200:
                         resultado = response_login.json()
                         
-                        # Se encontrou o registro correspondente
                         if len(resultado) > 0:
-                            st.session_state.operador_logado = True
-                            st.session_state.nome_operador = resultado[0]["nome"]
-                            st.success("Acesso autorizado!")
-                            st.rerun()
+                            dados_usuario = resultado[0]
+                            
+                            # Validamos a senha e o status 'ativo' direto no Python para evitar erros de tipo do banco
+                            # O .strip() remove qualquer espaço em branco invisível que tenha entrado sem querer
+                            senha_banco = str(dados_usuario.get("senha")).strip()
+                            senha_digitada = str(senha).strip()
+                            is_ativo = dados_usuario.get("ativo")
+                            
+                            # Checa se a senha bate e se o usuário está ativo (aceita True, true ou TRUE)
+                            if senha_digitada == senha_banco and (is_ativo is True or str(is_ativo).upper() == "TRUE"):
+                                st.session_state.operador_logado = True
+                                st.session_state.nome_operador = dados_usuario["nome"]
+                                st.success("Acesso autorizado!")
+                                st.rerun()
+                            else:
+                                st.error("❌ Senha incorreta ou operador inativo.")
                         else:
-                            st.error("❌ Usuário, senha inválidos ou operador inativo.")
+                            st.error("❌ Usuário não encontrado.")
                     else:
                         st.error("Erro na comunicação com o banco de dados do Supabase.")
                 except Exception as e:
+                    st.error(f"Erro ao tentar fazer login: {e}")
+            else:
+                st.warning("Por favor, preencha o usuário e a senha.")
                     st.error(f"Erro ao tentar fazer login: {e}")
             else:
                 st.warning("Por favor, preencha o usuário e a senha.")
