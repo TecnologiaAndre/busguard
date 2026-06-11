@@ -1,12 +1,11 @@
 import streamlit as st
 import requests
 import pandas as pd
-import datetime
 
 # 1. Configuração da Página (Modo Amplo para visualização em Computador/Monitor)
 st.set_page_config(page_title="Painel de Controle - BusGuard", page_icon="🖥️", layout="wide")
 
-# --- CREDENCIAIS PROTEGIDAS (Usando os mesmos secrets do seu app principal) ---
+# --- CREDENCIAIS PROTEGIDAS (Usando os secrets do seu app) ---
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 # -------------------------------------------------------------------
@@ -18,7 +17,7 @@ if "nome_operador" not in st.session_state:
     st.session_state.nome_operador = ""
 
 # =========================================================================
-# TELA DE LOGIN DO OPERADOR
+# TELA DE LOGIN DO OPERADOR (VALIDANDO NO BANCO DE DADOS)
 # =========================================================================
 if not st.session_state.operador_logado:
     st.title("🖥️ Centro de Controle BusGuard")
@@ -33,19 +32,37 @@ if not st.session_state.operador_logado:
             botao_entrar = st.form_submit_button("Acessar Painel", use_container_width=True)
             
         if botao_entrar:
-            # Aqui você pode validar contra uma tabela 'operadores' no Supabase.
-            # Para testar rápido, fixei um usuário padrão:
-            if usuario == "admin" and senha == "1234":
-                st.session_state.operador_logado = True
-                st.session_state.nome_operador = "Operador Central"
-                st.success("Acesso autorizado!")
-                st.rerun()
+            if usuario and senha:
+                try:
+                    # Faz a busca na tabela 'operadores' filtrando por usuário, senha e se está ativo
+                    url_login = f"{SUPABASE_URL}/rest/v1/operadores?usuario=eq.{usuario}&senha=eq.{senha}&ativo=eq.true&select=nome"
+                    headers_login = {
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                        "apikey": SUPABASE_KEY
+                    }
+                    response_login = requests.get(url_login, headers=headers_login)
+                    
+                    if response_login.status_code == 200:
+                        resultado = response_login.json()
+                        
+                        # Se encontrou o registro correspondente
+                        if len(resultado) > 0:
+                            st.session_state.operador_logado = True
+                            st.session_state.nome_operador = resultado[0]["nome"]
+                            st.success("Acesso autorizado!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Usuário, senha inválidos ou operador inativo.")
+                    else:
+                        st.error("Erro na comunicação com o banco de dados do Supabase.")
+                except Exception as e:
+                    st.error(f"Erro ao tentar fazer login: {e}")
             else:
-                st.error("❌ Usuário ou senha inválidos para o Painel.")
+                st.warning("Por favor, preencha o usuário e a senha.")
     st.stop()
 
 # =========================================================================
-# PAINEL PRINCIPAL (APÓS LOGIN DO OPERADOR)
+# PAINEL PRINCIPAL (APÓS LOGIN BEM-SUCEDIDO)
 # =========================================================================
 
 # Cabeçalho do Painel
@@ -69,7 +86,7 @@ if st.button("🔄 Atualizar Dados Agora"):
 
 # --- BUSCANDO AS OCORRÊNCIAS NO SUPABASE ---
 try:
-    # Ordena para trazer as ocorrências mais recentes primeiro (baseado no ID ou created_at)
+    # Ordena para trazer as ocorrências mais recentes primeiro (id.desc)
     url_buscar = f"{SUPABASE_URL}/rest/v1/ocorrencias?select=*&order=id.desc"
     headers = {
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -83,11 +100,10 @@ try:
         if len(dados_ocorrencias) == 0:
             st.info("ℹ️ Nenhuma ocorrência registrada no momento.")
         else:
-            # Convertendo os dados para um DataFrame do Pandas para facilitar a manipulação
+            # Convertendo dados para DataFrame para exibição estruturada
             df = pd.DataFrame(dados_ocorrencias)
             
-            # Reorganizando ou renomeando as colunas para o operador ver bonito
-            # Certifique-se de que esses nomes de colunas batem com o seu banco
+            # Dicionário para renomear as colunas (Ajuste os nomes da esquerda se forem diferentes no seu banco)
             colunas_exibicao = {
                 "id": "ID",
                 "prefixo_veiculo": "Ônibus",
@@ -97,11 +113,11 @@ try:
                 "foto_url": "Link da Foto"
             }
             
-            # Filtra apenas as colunas que existem no banco para evitar erros
+            # Filtra e renomeia apenas as colunas existentes para não quebrar o layout
             colunas_existentes = [col for col in colunas_exibicao.keys() if col in df.columns]
             df_filtrado = df[colunas_existentes].rename(columns=colunas_exibicao)
             
-            # --- ÁREA DE METRICAS ---
+            # --- ÁREA DE MÉTRICAS (KPIs) ---
             m1, m2, m3 = st.columns(3)
             m1.metric("Total de Ocorrências", len(df))
             m2.metric("Último Ônibus Afetado", str(df_filtrado["Ônibus"].iloc[0] if not df_filtrado.empty else "Nenhum"))
@@ -109,19 +125,18 @@ try:
             
             st.markdown("### 📋 Lista de Chamados Abertos")
             
-            # Exibindo os dados em formato de tabela rica interativa
-            # O st.dataframe permite que o operador ordene, filtre e pesquise na tabela
+            # Exibição da tabela interativa (Pesquisa, ordenação e filtros liberados na tela)
             st.dataframe(df_filtrado, use_container_width=True, hide_index=True)
             
             # --- DETALHAMENTO DA OCORRÊNCIA SELECIONADA ---
             st.markdown("---")
             st.markdown("### 🔍 Tratamento de Ocorrência Individual")
             
-            # Caixa de seleção para o operador escolher qual ID ele quer tratar e ver a foto
+            # Caixa de seleção para o operador escolher qual ID ele quer inspecionar
             id_selecionado = st.selectbox("Selecione o ID da ocorrência para ver detalhes e fotos:", options=df_filtrado["ID"].tolist())
             
             if id_selecionado:
-                # Filtrando a linha correspondente ao ID escolhido
+                # Localiza a linha correspondente ao ID selecionado
                 linha_ocorrencia = df[df["id"] == id_selecionado].iloc[0]
                 
                 col_dados, col_foto = st.columns([3, 2])
@@ -132,8 +147,8 @@ try:
                     st.write(f"**👤 Registrado por:** {linha_ocorrencia.get('registrador')}")
                     st.write(f"**📝 Descrição:** {linha_ocorrencia.get('descricao')}")
                     
-                    # Campo simulado para o operador interagir/tratar
-                    st.text_area("Anotações de Tratamento / Resolução", placeholder="Digite aqui as ações tomadas...")
+                    # Campo para o operador registrar o andamento
+                    st.text_area("Anotações de Tratamento / Resolução", placeholder="Digite aqui as ações tomadas...", key=f"nota_{id_selecionado}")
                     if st.button("✅ Marcar como Resolvido / Tratado", use_container_width=True):
                         st.success(f"Ocorrência {id_selecionado} atualizada com sucesso no sistema!")
                         
