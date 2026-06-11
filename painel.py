@@ -8,7 +8,7 @@ import streamlit as st
 # 1. CONFIGURAÇÃO DA INTERFACE E SESSÃO HTTP
 # =========================================================================
 st.set_page_config(
-    page_title="Painel de Controle - BusGuard", page_icon="🖥️", layout="wide"
+    page_title="Painel de Controle - Ocorrências", page_icon="🖥️", layout="wide"
 )
 
 # Inicializa as credenciais do banco de dados (Supabase)
@@ -83,7 +83,7 @@ if "nome_operador" not in st.session_state:
 # 4. MÓDULO DE AUTENTICAÇÃO (LOGIN)
 # =========================================================================
 if not st.session_state.operador_logado:
-    st.title("🖥️ Centro de Controle BusGuard")
+    st.title("🖥️ Centro de Controle Ocorrências")
     st.subheader("Área Restrita para Operadores e Tratamento de Dados")
     st.markdown("---")
 
