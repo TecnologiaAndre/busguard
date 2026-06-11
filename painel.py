@@ -1,17 +1,25 @@
 import streamlit as st
 import requests
 import pandas as pd
+import hashlib  # Biblioteca nativa para geração de Hashes seguros de criptografia
+import hmac     # Biblioteca nativa para comparação segura de hashes (evita timing attacks)
 
 # =========================================================================
 # 1. CONFIGURAÇÃO DA INTERFACE E AMBIENTE
 # =========================================================================
-
-# Define o layout em modo 'wide' (amplo) para melhor aproveitamento em monitores.
 st.set_page_config(page_title="Painel de Controle - BusGuard", page_icon="🖥️", layout="wide")
 
-# Variáveis seguras extraídas do secrets do Streamlit.
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+
+# --- FUNÇÃO AUXILIAR DE CRIPTOGRAFIA ---
+# Esta função pega o texto puro da senha e gera uma assinatura SHA-256 única.
+# Adicionamos um 'Salt' (uma chave secreta) para garantir que ninguém consiga 
+# descriptografar a senha caso vejam o banco de dados.
+def gerar_hash_senha(senha_pura: str) -> str:
+    salt = SUPABASE_KEY[:16].encode('utf-8') # Usa os primeiros 16 dígitos da chave do Supabase como tempero de segurança
+    hash_calculado = hashlib.pbkdf2_hmac('sha256', senha_pura.encode('utf-8'), salt, 100000)
+    return hash_calculado.hex()
 
 # =========================================================================
 # 2. GESTÃO DE ESTADO DO OPERADOR (SESSION STATE)
@@ -22,7 +30,7 @@ if "nome_operador" not in st.session_state:
     st.session_state.nome_operador = ""
 
 # =========================================================================
-# 3. MÓDULO DE AUTENTICAÇÃO (TELA DE LOGIN)
+# 3. MÓDULO DE AUTENTICAÇÃO COM AUTO-HASHING NA PRIMEIRA TENTATIVA
 # =========================================================================
 if not st.session_state.operador_logado:
     st.title("🖥️ Centro de Controle BusGuard")
@@ -33,7 +41,7 @@ if not st.session_state.operador_logado:
     with col1:
         with st.form("login_operador"):
             usuario = st.text_input("Usuário / Matrícula")
-            senha = st.text_input("Senha de Acesso", type="password")
+            senha = st.text_input("Senha de Acesso", type="password", placeholder="Digite sua senha")
             botao_entrar = st.form_submit_button("Acessar Painel", use_container_width=True)
             
         if botao_entrar:
@@ -51,17 +59,52 @@ if not st.session_state.operador_logado:
                         
                         if len(resultado) > 0:
                             dados_usuario = resultado[0]
+                            id_operador = dados_usuario.get("id")
                             senha_banco = str(dados_usuario.get("senha")).strip()
                             senha_digitada = str(senha).strip()
                             is_ativo = dados_usuario.get("ativo")
                             
-                            if senha_digitada == senha_banco and (is_ativo is True or str(is_ativo).upper() == "TRUE"):
+                            # Verifica se o operador está de fato ativo antes de testar a senha
+                            if not (is_ativo is True or str(is_ativo).upper() == "TRUE"):
+                                st.error("❌ Operador inativo no sistema.")
+                                st.stop()
+                            
+                            # Calcula o hash da senha digitada para testar se o banco já está em formato criptografado
+                            hash_da_digitada = gerar_hash_senha(senha_digitada)
+                            
+                            login_valido = False
+                            precisa_converter_para_hash = False
+                            
+                            # CENÁRIO A: O banco já guarda a senha em formato Hash (A partir do 2º login)
+                            if len(senha_banco) == 64 and hmac.compare_digest(senha_banco, hash_da_digitada):
+                                login_valido = True
+                                
+                            # CENÁRIO B: O banco ainda guarda a senha em texto puro (1º login com sucesso)
+                            elif senha_digitada == senha_banco:
+                                login_valido = True
+                                precisa_converter_para_hash = True # Aciona a flag para atualizar o banco
+                                
+                            if login_valido:
+                                # --- PROCESSO DE MIGRAÇÃO: TRANSFORMA A SENHA EM HASH SE FOR A 1ª VEZ ---
+                                if precisa_converter_para_hash:
+                                    with st.spinner("🔒 Protegendo sua conta: Gerando chave Hash criptografada..."):
+                                        url_patch_senha = f"{SUPABASE_URL}/rest/v1/operadores?id=eq.{id_operador}"
+                                        headers_patch = {
+                                            "Authorization": f"Bearer {SUPABASE_KEY}",
+                                            "apikey": SUPABASE_KEY,
+                                            "Content-Type": "application/json"
+                                        }
+                                        # Sobrescreve a senha antiga em texto puro pelo hash de 64 caracteres
+                                        payload_senha = {"senha": hash_da_digitada}
+                                        requests.patch(url_patch_senha, headers=headers_patch, json=payload_senha)
+                                
+                                # Libera o painel após o salvamento seguro
                                 st.session_state.operador_logado = True
                                 st.session_state.nome_operador = dados_usuario["nome"]
-                                st.success("Acesso autorizado!")
+                                st.success("Acesso autorizado de forma segura!")
                                 st.rerun()
                             else:
-                                st.error("❌ Senha incorreta ou operador inativo.")
+                                st.error("❌ Senha incorreta.")
                         else:
                             st.error("❌ Usuário não encontrado.")
                     else:
@@ -73,9 +116,8 @@ if not st.session_state.operador_logado:
     st.stop()
 
 # =========================================================================
-# 4. PAINEL PRINCIPAL (CENTRAL DE MONITORAMENTO)
+# 4. PAINEL PRINCIPAL (DEMAIS REQUISITOS SEPARADOS EM ABAS)
 # =========================================================================
-
 col_tit, col_user, col_btn_sair = st.columns([3, 1, 1])
 with col_tit:
     st.title("📊 Painel de Monitoramento em Tempo Real")
@@ -91,13 +133,9 @@ with col_btn_sair:
 st.markdown("---")
 
 if st.button("🔄 Atualizar Dados Agora"):
-    st.toast("Dados updated!")
+    st.toast("Dados atualizados!")
 
-# -------------------------------------------------------------------------
-# LEITURA DOS DADOS TOTAIS NO SUPABASE
-# -------------------------------------------------------------------------
 try:
-    # Continuamos buscando todas as ocorrências para calcular as métricas globais de forma centralizada
     url_buscar = f"{SUPABASE_URL}/rest/v1/ocorrencias?select=*&order=id.desc"
     headers = {
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -113,11 +151,9 @@ try:
         else:
             df = pd.DataFrame(dados_ocorrencias)
             
-            # Garante compatibilidade: Se a coluna 'status' acabou de ser criada e o Pandas não mapeou, força sua existência local
             if "status" not in df.columns:
                 df["status"] = "Aberto"
 
-            # Mapeamento técnico de colunas para exibição em tabelas
             colunas_exibicao = {
                 "prefixo_veiculo": "Ônibus",
                 "tipo": "Tipo",
@@ -128,23 +164,17 @@ try:
             }
             colunas_existentes = [col for col in colunas_exibicao.keys() if col in df.columns]
             
-            # --- SEPARAÇÃO DOS DATA_FRAMES VIA PANDAS ---
-            # Separamos as ocorrências baseadas no valor da coluna física 'status' do banco
             df_abertos = df[df["status"] == "Aberto"]
             df_tratados = df[df["status"] == "Tratado"]
             
-            # --- ÁREA DE MÉTRICAS ANALÍTICAS (KPIs) ---
             m1, m2, m3 = st.columns(3)
             m1.metric("Total de Chamados em Aberto", len(df_abertos))
             m2.metric("Total de Chamados Tratados", len(df_tratados))
             m3.metric("Último Ônibus Afetado", str(df[df["status"] == "Aberto"]["prefixo_veiculo"].iloc[0] if not df_abertos.empty else "Nenhum"))
             
-            # --- CRIAÇÃO DAS ABAS VISUAIS ---
             aba_abertos, aba_tratados = st.tabs(["📋 Chamados Abertos", "✅ Histórico de Tratados"])
             
-            # =========================================================================
             # ABA 1: CHAMADOS EM ABERTO
-            # =========================================================================
             with aba_abertos:
                 if df_abertos.empty:
                     st.success("🎉 Excelente! Nenhum chamado em aberto no momento.")
@@ -152,11 +182,9 @@ try:
                     df_abertos_filtrado = df_abertos[colunas_existentes].rename(columns=colunas_exibicao)
                     st.dataframe(df_abertos_filtrado, use_container_width=True, hide_index=True)
                     
-                    # --- MÓDULO ATIVO DE TRATAMENTO INDIVIDUAL (APENAS PARA EM ABERTO) ---
                     st.markdown("---")
                     st.markdown("### 🔍 Tratamento de Ocorrência Individual")
                     
-                    # Transforma em lista apenas as linhas que estão de fato com o status 'Aberto'
                     dados_abertos_json = df_abertos.to_dict(orient="records")
                     opcoes_ocorrencias = {
                         row["id"]: f"Veículo {row.get('prefixo_veiculo')} - {row.get('tipo')}" 
@@ -180,23 +208,18 @@ try:
                             st.write(f"**👤 Registrado por:** {linha_ocorrencia.get('registrador')}")
                             st.write(f"**📝 Descrição:** {linha_ocorrencia.get('descricao')}")
                             
-                            # Campo de texto para o operador detalhar o que foi feito para resolver
                             texto_nota = st.text_area("Anotações de Tratamento / Resolução", placeholder="Digite aqui as ações tomadas...", key=f"nota_{id_selecionado}")
                             
-                            # MODIFICADO AQUI: Agora executa a persistência real via HTTP PATCH no Supabase
                             if st.button("✅ Marcar como Resolvido / Tratado", use_container_width=True):
                                 with st.spinner("Atualizando dados no servidor do Supabase..."):
                                     try:
-                                        # Aponta para a linha exata da ocorrência usando filtros PostgREST (?id=eq.X)
                                         url_patch = f"{SUPABASE_URL}/rest/v1/ocorrencias?id=eq.{id_selecionado}"
-                                        
                                         headers_patch = {
                                             "Authorization": f"Bearer {SUPABASE_KEY}",
                                             "apikey": SUPABASE_KEY,
                                             "Content-Type": "application/json"
                                         }
                                         
-                                        # Envia o novo status para 'Tratado' e anexa o texto explicativo
                                         dados_patch = {
                                             "status": "Tratado",
                                             "anotacao_operador": str(texto_nota)
@@ -204,10 +227,9 @@ try:
                                         
                                         response_patch = requests.patch(url_patch, headers=headers_patch, json=dados_patch)
                                         
-                                        # Códigos HTTP 200 ou 204 indicam que a alteração de linha foi processada com sucesso
                                         if response_patch.status_code in [200, 204]:
                                             st.success(f"✅ Ocorrência do veículo {linha_ocorrencia.get('prefixo_veiculo')} tratada com sucesso!")
-                                            st.rerun() # Força o recarregamento total. O item some de 'Abertos' e vai para 'Tratados'
+                                            st.rerun()
                                         else:
                                             st.error(f"❌ Erro ao salvar alteração (Código HTTP {response_patch.status_code})")
                                     except Exception as ex_patch:
@@ -221,18 +243,14 @@ try:
                             else:
                                 st.warning("Nenhuma foto anexada a este registro.")
 
-            # =========================================================================
             # ABA 2: HISTÓRICO DE TRATADOS
-            # =========================================================================
             with aba_tratados:
                 if df_tratados.empty:
                     st.info("ℹ️ Nenhum chamado foi movido para o histórico de resolvidos até o momento.")
                 else:
                     df_tratados_filtrado = df_tratados[colunas_existentes].rename(columns=colunas_exibicao)
-                    # Renderiza a lista de chamados antigos para auditoria interna
                     st.dataframe(df_tratados_filtrado, use_container_width=True, hide_index=True)
                     
-                    # Exibição simples e estática apenas para conferência visual das ocorrências antigas
                     st.markdown("---")
                     st.markdown("### 🔍 Histórico de Detalhes Remotos")
                     
