@@ -17,7 +17,7 @@ if "nome_operador" not in st.session_state:
     st.session_state.nome_operador = ""
 
 # =========================================================================
-# TELA DE LOGIN DO OPERADOR (VALIDAÇÃO INTELIGENTE)
+# TELA DE LOGIN DO OPERADOR (COM DIAGNÓSTICO INTEGRADO)
 # =========================================================================
 if not st.session_state.operador_logado:
     st.title("🖥️ Centro de Controle BusGuard")
@@ -42,13 +42,21 @@ if not st.session_state.operador_logado:
                     }
                     response_login = requests.get(url_login, headers=headers_login)
                     
+                    # 🔍 --- ÁREA DE DIAGNÓSTICO NA TELA ---
+                    st.info("--- ⚙️ DIAGNÓSTICO DO SUPABASE ---")
+                    st.write(f"**Código de Resposta HTTP:** {response_login.status_code}")
+                    st.write("**Dados que retornaram do Banco:**")
+                    st.code(response_login.json(), language="json")
+                    st.markdown("---------------------------------")
+                    # --------------------------------------
+                    
                     if response_login.status_code == 200:
                         resultado = response_login.json()
                         
                         if len(resultado) > 0:
                             dados_usuario = resultado[0]
                             
-                            # Limpa espaços invisíveis que possam existir no banco ou na digitação
+                            # Limpa espaços invisíveis
                             senha_banco = str(dados_usuario.get("senha")).strip()
                             senha_digitada = str(senha).strip()
                             is_ativo = dados_usuario.get("ativo")
@@ -62,7 +70,7 @@ if not st.session_state.operador_logado:
                             else:
                                 st.error("❌ Senha incorreta ou operador inativo.")
                         else:
-                            st.error("❌ Usuário não encontrado.")
+                            st.error("❌ Usuário não encontrado no banco (O Supabase retornou uma lista vazia []).")
                     else:
                         st.error("Erro na comunicação com o banco de dados do Supabase.")
                 except Exception as e:
@@ -92,7 +100,7 @@ st.markdown("---")
 
 # Botão manual para atualizar os dados na hora
 if st.button("🔄 Atualizar Dados Agora"):
-    st.toast("Dados atualizados!")
+    st.toast("Dados updated!")
 
 # --- BUSCANDO AS OCORRÊNCIAS NO SUPABASE ---
 try:
@@ -155,7 +163,7 @@ try:
                         
                 with col_foto:
                     st.write("**📸 Evidência Fotográfica:**")
-                    url_foto = linha_ocorrencia.get('foto_url')
+                    url_foto = Server_url = linha_ocorrencia.get('foto_url')
                     if url_foto:
                         st.image(url_foto, caption=f"Foto da Ocorrência ID {id_selecionado}", use_container_width=True)
                     else:
