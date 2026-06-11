@@ -17,7 +17,7 @@ if "nome_operador" not in st.session_state:
     st.session_state.nome_operador = ""
 
 # =========================================================================
-# TELA DE LOGIN DO OPERADOR (VALIDAÇÃO INTELIGENTE)
+# TELA DE LOGIN DO OPERADOR
 # =========================================================================
 if not st.session_state.operador_logado:
     st.title("🖥️ Centro de Controle BusGuard")
@@ -48,7 +48,7 @@ if not st.session_state.operador_logado:
                         if len(resultado) > 0:
                             dados_usuario = resultado[0]
                             
-                            # Limpa espaços invisíveis que possam existir no banco ou na digitação
+                            # Limpa espaços invisíveis
                             senha_banco = str(dados_usuario.get("senha")).strip()
                             senha_digitada = str(senha).strip()
                             is_ativo = dados_usuario.get("ativo")
@@ -113,7 +113,6 @@ try:
             
             # Mapeamento de colunas do banco para exibição em português
             colunas_exibicao = {
-                "id": "ID",
                 "prefixo_veiculo": "Ônibus",
                 "tipo": "Tipo",
                 "descricao": "Descrição",
@@ -137,7 +136,17 @@ try:
             st.markdown("---")
             st.markdown("### 🔍 Tratamento de Ocorrência Individual")
             
-            id_selecionado = st.selectbox("Selecione o ID da ocorrência para ver detalhes e fotos:", options=df_filtrado["ID"].tolist())
+            # Monta a lista de opções exibindo o Prefixo e o Tipo para o operador escolher, mas guardando o ID por trás
+            opcoes_ocorrencias = {
+                row["id"]: f"Veículo {row.get('prefixo_veiculo')} - {row.get('tipo')}" 
+                for row in dados_ocorrencias
+            }
+            
+            id_selecionado = st.selectbox(
+                "Selecione a ocorrência para ver detalhes e fotos:", 
+                options=list(opcoes_ocorrencias.keys()),
+                format_func=lambda x: opcoes_ocorrencias[x]
+            )
             
             if id_selecionado:
                 linha_ocorrencia = df[df["id"] == id_selecionado].iloc[0]
@@ -151,13 +160,13 @@ try:
                     
                     st.text_area("Anotações de Tratamento / Resolução", placeholder="Digite aqui as ações tomadas...", key=f"nota_{id_selecionado}")
                     if st.button("✅ Marcar como Resolvido / Tratado", use_container_width=True):
-                        st.success(f"Ocorrência {id_selecionado} atualizada com sucesso no sistema!")
+                        st.success(f"Ocorrência atualizada com sucesso no sistema!")
                         
                 with col_foto:
                     st.write("**📸 Evidência Fotográfica:**")
                     url_foto = linha_ocorrencia.get('foto_url')
                     if url_foto:
-                        st.image(url_foto, caption=f"Foto da Ocorrência ID {id_selecionado}", use_container_width=True)
+                        st.image(url_foto, caption=f"Foto da Ocorrência", use_container_width=True)
                     else:
                         st.warning("Nenhuma foto anexada a este registro.")
                         
