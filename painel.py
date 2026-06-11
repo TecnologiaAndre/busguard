@@ -83,7 +83,7 @@ if "nome_operador" not in st.session_state:
 # 4. MÓDULO DE AUTENTICAÇÃO (LOGIN)
 # =========================================================================
 if not st.session_state.operador_logado:
-    st.title("🖥️ Centro de Controle Ocorrências")
+    st.title("🖥️ Centro de Controle - Ocorrências")
     st.subheader("Área Restrita para Operadores e Tratamento de Dados")
     st.markdown("---")
 
