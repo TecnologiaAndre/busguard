@@ -17,13 +17,24 @@ if "nome_operador" not in st.session_state:
     st.session_state.nome_operador = ""
 
 # =========================================================================
-# TELA DE LOGIN DO OPERADOR (VALIDANDO NO BANCO DE DADOS)
+# TELA DE LOGIN DO OPERADOR (VALIDAÇÃO INTELIGENTE)
 # =========================================================================
 if not st.session_state.operador_logado:
-    if botao_entrar:
+    st.title("🖥️ Centro de Controle BusGuard")
+    st.subheader("Área Restrita para Operadores e Tratamento de Dados")
+    st.markdown("---")
+    
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        with st.form("login_operador"):
+            usuario = st.text_input("Usuário / Matrícula")
+            senha = st.text_input("Senha de Acesso", type="password")
+            botao_entrar = st.form_submit_button("Acessar Painel", use_container_width=True)
+            
+        if botao_entrar:
             if usuario and senha:
                 try:
-                    # Buscamos apenas pelo usuário (ignorando maiúsculas/minúsculas com ilike)
+                    # Buscamos no banco apenas pelo usuário (removendo maiúsculas/minúsculas)
                     url_login = f"{SUPABASE_URL}/rest/v1/operadores?usuario=ilike.{usuario.strip()}&select=*"
                     headers_login = {
                         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -37,13 +48,12 @@ if not st.session_state.operador_logado:
                         if len(resultado) > 0:
                             dados_usuario = resultado[0]
                             
-                            # Validamos a senha e o status 'ativo' direto no Python para evitar erros de tipo do banco
-                            # O .strip() remove qualquer espaço em branco invisível que tenha entrado sem querer
+                            # Limpa espaços invisíveis que possam existir no banco ou na digitação
                             senha_banco = str(dados_usuario.get("senha")).strip()
                             senha_digitada = str(senha).strip()
                             is_ativo = dados_usuario.get("ativo")
                             
-                            # Checa se a senha bate e se o usuário está ativo (aceita True, true ou TRUE)
+                            # Validação exata da senha e do status ativo
                             if senha_digitada == senha_banco and (is_ativo is True or str(is_ativo).upper() == "TRUE"):
                                 st.session_state.operador_logado = True
                                 st.session_state.nome_operador = dados_usuario["nome"]
@@ -56,9 +66,6 @@ if not st.session_state.operador_logado:
                     else:
                         st.error("Erro na comunicação com o banco de dados do Supabase.")
                 except Exception as e:
-                    st.error(f"Erro ao tentar fazer login: {e}")
-            else:
-                st.warning("Por favor, preencha o usuário e a senha.")
                     st.error(f"Erro ao tentar fazer login: {e}")
             else:
                 st.warning("Por favor, preencha o usuário e a senha.")
@@ -89,7 +96,6 @@ if st.button("🔄 Atualizar Dados Agora"):
 
 # --- BUSCANDO AS OCORRÊNCIAS NO SUPABASE ---
 try:
-    # Ordena para trazer as ocorrências mais recentes primeiro (id.desc)
     url_buscar = f"{SUPABASE_URL}/rest/v1/ocorrencias?select=*&order=id.desc"
     headers = {
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -103,10 +109,9 @@ try:
         if len(dados_ocorrencias) == 0:
             st.info("ℹ️ Nenhuma ocorrência registrada no momento.")
         else:
-            # Convertendo dados para DataFrame para exibição estruturada
             df = pd.DataFrame(dados_ocorrencias)
             
-            # Dicionário para renomear as colunas (Ajuste os nomes da esquerda se forem diferentes no seu banco)
+            # Mapeamento de colunas do banco para exibição em português
             colunas_exibicao = {
                 "id": "ID",
                 "prefixo_veiculo": "Ônibus",
@@ -116,7 +121,6 @@ try:
                 "foto_url": "Link da Foto"
             }
             
-            # Filtra e renomeia apenas as colunas existentes para não quebrar o layout
             colunas_existentes = [col for col in colunas_exibicao.keys() if col in df.columns]
             df_filtrado = df[colunas_existentes].rename(columns=colunas_exibicao)
             
@@ -127,21 +131,16 @@ try:
             m3.metric("Status do Servidor", "Online 🟢")
             
             st.markdown("### 📋 Lista de Chamados Abertos")
-            
-            # Exibição da tabela interativa (Pesquisa, ordenação e filtros liberados na tela)
             st.dataframe(df_filtrado, use_container_width=True, hide_index=True)
             
             # --- DETALHAMENTO DA OCORRÊNCIA SELECIONADA ---
             st.markdown("---")
             st.markdown("### 🔍 Tratamento de Ocorrência Individual")
             
-            # Caixa de seleção para o operador escolher qual ID ele quer inspecionar
             id_selecionado = st.selectbox("Selecione o ID da ocorrência para ver detalhes e fotos:", options=df_filtrado["ID"].tolist())
             
             if id_selecionado:
-                # Localiza a linha correspondente ao ID selecionado
                 linha_ocorrencia = df[df["id"] == id_selecionado].iloc[0]
-                
                 col_dados, col_foto = st.columns([3, 2])
                 
                 with col_dados:
@@ -150,7 +149,6 @@ try:
                     st.write(f"**👤 Registrado por:** {linha_ocorrencia.get('registrador')}")
                     st.write(f"**📝 Descrição:** {linha_ocorrencia.get('descricao')}")
                     
-                    # Campo para o operador registrar o andamento
                     st.text_area("Anotações de Tratamento / Resolução", placeholder="Digite aqui as ações tomadas...", key=f"nota_{id_selecionado}")
                     if st.button("✅ Marcar como Resolvido / Tratado", use_container_width=True):
                         st.success(f"Ocorrência {id_selecionado} atualizada com sucesso no sistema!")
