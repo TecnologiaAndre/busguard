@@ -1,7 +1,6 @@
 import streamlit as st
 from supabase import create_client, Client
 import datetime
-import io  # Adicionado para garantir o upload correto de mídias
 
 # =========================================================================
 # 1. CONFIGURAÇÃO DA INTERFACE E AMBIENTE
@@ -152,12 +151,10 @@ if botao_enviar:
                 nome_do_arquivo = f"{prefixo}_{timestamp}.jpg"
                 bytes_da_foto = foto_arquivo.getvalue()
                 
-                # CORREÇÃO DA FOTO: io.BytesIO simula um arquivo aberto em memória, evitando erros na biblioteca do Supabase
-                arquivo_simulado = io.BytesIO(bytes_da_foto)
-                
+                # ALTERAÇÃO AQUI: Passando os bytes puros diretamente (sem BytesIO)
                 supabase.storage.from_("fotos-ocorrencias").upload(
                     path=nome_do_arquivo,
-                    file=arquivo_simulado,
+                    file=bytes_da_foto,
                     file_options={"content-type": "image/jpeg"}
                 )
                 
