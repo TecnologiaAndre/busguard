@@ -1,11 +1,14 @@
+import datetime
 import streamlit as st
 from supabase import create_client, Client
-import datetime
+from PIL import Image
+import io
 
 # =========================================================================
 # 1. CONFIGURAÇÃO DA INTERFACE E AMBIENTE
 # =========================================================================
 
+# Força o layout centralizado (que vira coluna única perfeita no mobile)
 st.set_page_config(page_title="Ocorrências Em Trânsito", page_icon="🚌", layout="centered")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -33,11 +36,12 @@ if "nome_motorista" not in st.session_state:
 # =========================================================================
 
 if not st.session_state.logado:
-    st.title("🔐 Ocorrências Em Trânsito - Acesso")
-    st.subheader("Identifique-se para acessar o sistema")
+    st.title("🔐 Acesso ao Sistema")
+    st.subheader("Identifique-se para continuar")
     st.markdown("---")
     
     with st.form("form_login"):
+        # placeholders curtos e diretos ajudam no mobile
         input_matricula = st.text_input("Matrícula", placeholder="Digite sua matrícula")
         input_cpf = st.text_input("CPF (Apenas números)", type="password", placeholder="Digite seu CPF")
         botao_login = st.form_submit_button("Entrar", use_container_width=True)
@@ -48,8 +52,9 @@ if not st.session_state.logado:
         else:
             with st.spinner("Autenticando..."):
                 try:
+                    # Otimização: Traz apenas o necessário em vez de "*"
                     resposta_login = supabase.table("cadastro_login") \
-                        .select("*") \
+                        .select("matricula") \
                         .eq("matricula", input_matricula) \
                         .eq("cpf", input_cpf) \
                         .execute()
@@ -71,12 +76,12 @@ if not st.session_state.logado:
                         st.session_state.matricula_usuario = input_matricula
                         st.session_state.nome_motorista = nome_encontrado
                         
-                        st.success("✅ Login efetuado com sucesso!")
+                        st.success("✅ Login efetuado!")
                         st.rerun() 
                     else:
-                        st.error("❌ Matrícula ou CPF incorretos. Tente novamente.")
+                        st.error("❌ Matrícula ou CPF incorretos.")
                 except Exception as e:
-                    st.error(f"❌ Erro crítico no login: {e}")
+                    st.error(f"❌ Erro no login: {e}")
                     
     st.stop() 
 
@@ -87,6 +92,7 @@ if not st.session_state.logado:
 @st.cache_data(ttl=3600)
 def carregar_veiculos():
     try:
+        # Busca apenas a coluna necessária para economizar banda
         resposta = supabase.table("veiculos").select("prefixo").execute()
         return [row["prefixo"] for row in resposta.data] if resposta.data else []
     except Exception:
@@ -100,19 +106,18 @@ def carregar_tipos_ocorrencia():
     except Exception:
         return []
 
-col_titulo, col_sair = st.columns([4, 1])
-with col_titulo:
-    st.title("🚌 Ocorrências Em Trânsito")
-with col_sair:
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("Sair 🚪"):
+# --- DESIGN MOBILE: Mover informações de sessão e "Sair" para o Sidebar ---
+with st.sidebar:
+    st.markdown(f"👤 **Usuário:**\n{st.session_state.nome_motorista}")
+    st.markdown(f"🆔 **Matrícula:** {st.session_state.matricula_usuario}")
+    st.markdown("---")
+    if st.button("Sair da Conta 🚪", use_container_width=True):
         st.session_state.logado = False
         st.session_state.matricula_usuario = ""
         st.session_state.nome_motorista = ""
         st.rerun()
 
-st.subheader("Registro de Ocorrências da Frota")
-st.markdown(f"👤 **Motorista Logado:** {st.session_state.nome_motorista}")
+st.title("🚌 Ocorrências em Trânsito")
 st.markdown("---")
 
 lista_onibus = carregar_veiculos()
@@ -121,9 +126,6 @@ lista_tipos = carregar_tipos_ocorrencia()
 if not lista_tipos:
     lista_tipos = ["Mecânica", "Batida/Sinistro", "Limpeza/Conservação", "Vandalismo", "Outros"]
 
-# -------------------------------------------------------------------------
-# CONSTRUÇÃO DO FORMULÁRIO VISUAL
-# -------------------------------------------------------------------------
 with st.form("form_ocorrencia", clear_on_submit=True):
     if lista_onibus:
         prefixo = st.selectbox("Selecione o Ônibus (Prefixo)", options=lista_onibus)
@@ -132,6 +134,8 @@ with st.form("form_ocorrencia", clear_on_submit=True):
         
     tipo = st.selectbox("Tipo de Ocorrência", options=lista_tipos)
     descricao = st.text_area("Descrição Detalhada do Problema", placeholder="Descreva o que aconteceu...")
+    
+    # Componente nativo de câmera (abre a câmera do celular perfeitamente)
     foto_arquivo = st.camera_input("📸 Tire a foto da ocorrência")
     
     botao_enviar = st.form_submit_button("💾 Registrar Ocorrência", use_container_width=True)
@@ -141,17 +145,34 @@ with st.form("form_ocorrencia", clear_on_submit=True):
 # =========================================================================
 if botao_enviar:
     if not prefixo or not descricao or not foto_arquivo:
-        st.error("❌ Por favor, preencha todos os campos e tire a foto antes de enviar!")
+        st.error("❌ Preencha todos os campos e capture a foto antes de enviar!")
     else:
-        with st.spinner("Processando e enviando dados... Por favor, aguarde."):
+        with st.spinner("Enviando dados... (Otimizando imagem)"):
             try:
                 nome_registrador = st.session_state.nome_motorista
-
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 nome_do_arquivo = f"{prefixo}_{timestamp}.jpg"
-                bytes_da_foto = foto_arquivo.getvalue()
                 
-                # ALTERAÇÃO AQUI: Passando os bytes puros diretamente (sem BytesIO)
+                # --- OTIMIZAÇÃO CRUCIAL PARA SMARTPHONES: COMPRESSÃO DE IMAGEM ---
+                # Abre a imagem original vinda da câmera
+                img_original = Image.open(foto_arquivo)
+                
+                # Redimensiona mantendo a proporção (Largura máxima de 1024px é ideal para telas)
+                max_width = 1024
+                if img_original.width > max_width:
+                    w_percent = (max_width / float(img_original.width))
+                    h_size = int((float(img_original.height) * float(w_percent)))
+                    img_otimizada = img_original.resize((max_width, h_size), Image.Resampling.LANCEZOS)
+                else:
+                    img_otimizada = img_original
+
+                # Salva em um buffer de memória aplicando compressão JPEG (Qualidade 75)
+                buffer_bytes = io.BytesIO()
+                img_otimizada.save(buffer_bytes, format="JPEG", quality=75, optimize=True)
+                bytes_da_foto = buffer_bytes.getvalue()
+                # -----------------------------------------------------------------
+                
+                # Envia os bytes otimizados (muito menor e mais rápido)
                 supabase.storage.from_("fotos-ocorrencias").upload(
                     path=nome_do_arquivo,
                     file=bytes_da_foto,
@@ -170,7 +191,7 @@ if botao_enviar:
                 
                 supabase.table("ocorrencias").insert(dados_ocorrencia).execute()
                 
-                st.success(f"✅ Ocorrência registrada com sucesso por {nome_registrador}!")
+                st.success("✅ Ocorrência registrada com sucesso!")
                 st.balloons()
                 
             except Exception as e:
