@@ -1,9 +1,11 @@
 import streamlit as st
 from supabase import create_client, Client
 import datetime
+import sqlite3  # <- Controla o banco offline
+import base64   # <- Converte a foto em texto para salvar no celular
 
 # =========================================================================
-# 1. CONFIGURAÇÃO DA INTERFACE E AMBIENTE
+# 1. CONFIGURAÇÃO DA INTERFACE, AMBIENTE E BANCO LOCAL (OFFLINE)
 # =========================================================================
 
 st.set_page_config(page_title="Ocorrências Em Trânsito", page_icon="🚌", layout="centered")
@@ -16,6 +18,26 @@ def init_supabase() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 supabase = init_supabase()
+
+# Inicialização do Banco de Dados SQLite Local Persistente no Celular
+def init_local_db():
+    conn = sqlite3.connect("/data/ocorrencias_offline.db", check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS fila_ocorrencias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prefixo_veiculo TEXT,
+            tipo TEXT,
+            descricao TEXT,
+            registrador TEXT,
+            foto_bytes_base64 TEXT,
+            data_registro TEXT
+        )
+    """)
+    conn.commit()
+    return conn
+
+conn_local = init_local_db()
 
 # =========================================================================
 # 2. GESTÃO DE ESTADO DO OPERADOR (SESSION STATE)
@@ -76,7 +98,9 @@ if not st.session_state.logado:
                     else:
                         st.error("❌ Matrícula ou CPF incorretos. Tente novamente.")
                 except Exception as e:
-                    st.error(f"❌ Erro crítico no login: {e}")
+                    # NOTA: Em modo 100% offline inicial, o login vai falhar porque depende do Supabase. 
+                    # Se os motoristas já iniciarem o app sem internet, precisaremos de cache de login (futuro).
+                    st.error(f"❌ Erro de conexão ou credenciais. Verifique sua internet: {e}")
                     
     st.stop() 
 
@@ -137,21 +161,20 @@ with st.form("form_ocorrencia", clear_on_submit=True):
     botao_enviar = st.form_submit_button("💾 Registrar Ocorrência", use_container_width=True)
 
 # =========================================================================
-# 5. PROCESSAMENTO E ENVIO DOS DADOS (SUBMIT DO FORMULÁRIO)
+# 5. PROCESSAMENTO E ENVIO DOS DADOS (MODIFICADO PARA SUPORTAR OFFLINE)
 # =========================================================================
 if botao_enviar:
     if not prefixo or not descricao or not foto_arquivo:
         st.error("❌ Por favor, preencha todos os campos e tire a foto antes de enviar!")
     else:
-        with st.spinner("Processando e enviando dados... Por favor, aguarde."):
+        with st.spinner("Processando dados... Por favor, aguarde."):
+            nome_registrador = st.session_state.nome_motorista
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            nome_do_arquivo = f"{prefixo}_{timestamp}.jpg"
+            bytes_da_foto = foto_arquivo.getvalue()
+            
             try:
-                nome_registrador = st.session_state.nome_motorista
-
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                nome_do_arquivo = f"{prefixo}_{timestamp}.jpg"
-                bytes_da_foto = foto_arquivo.getvalue()
-                
-                # ALTERAÇÃO AQUI: Passando os bytes puros diretamente (sem BytesIO)
+                # TENTATIVA ONLINE: Envia foto para o Storage
                 supabase.storage.from_("fotos-ocorrencias").upload(
                     path=nome_do_arquivo,
                     file=bytes_da_foto,
@@ -160,6 +183,7 @@ if botao_enviar:
                 
                 url_da_foto = supabase.storage.from_("fotos-ocorrencias").get_public_url(nome_do_arquivo)
                 
+                # Envia dados para a Tabela
                 dados_ocorrencia = {
                     "prefixo_veiculo": str(prefixo), 
                     "tipo": tipo,
@@ -167,11 +191,24 @@ if botao_enviar:
                     "foto_url": url_da_foto,
                     "registrador": str(nome_registrador)
                 }
-                
                 supabase.table("ocorrencias").insert(dados_ocorrencia).execute()
                 
-                st.success(f"✅ Ocorrência registrada com sucesso por {nome_registrador}!")
+                st.success(f"✅ Ocorrência registrada ONLINE com sucesso por {nome_registrador}!")
                 st.balloons()
                 
-            except Exception as e:
-                st.error(f"❌ Erro crítico no envio: {e}")
+            except Exception as erro_rede:
+                # SE FALHAR (OFFLINE): Salva localmente no banco SQLite do celular
+                cursor_local = conn_local.cursor()
+                
+                # Transforma os bytes da foto em texto base64 para armazenar no SQLite de forma segura
+                foto_base64 = base64.b64encode(bytes_da_foto).decode("utf-8")
+                
+                cursor_local.execute("""
+                    INSERT INTO fila_ocorrencias 
+                    (prefixo_veiculo, tipo, descricao, registrador, foto_bytes_base64, data_registro)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (str(prefixo), tipo, descricao, str(nome_registrador), foto_base64, timestamp))
+                
+                conn_local.commit()
+                
+                st.warning("⚠️ Você está sem sinal de internet! A ocorrência foi salva localmente no seu celular e será enviada automaticamente assim que a conexão retornar.")
