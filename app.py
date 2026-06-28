@@ -1,11 +1,12 @@
 import streamlit as st
-from supabase import create_client, Client
 import datetime
-import sqlite3  # <- Controla o banco offline
-import base64   # <- Transforma a foto em texto e vice-versa
+import base64
+import requests
+import json
+import os
 
 # =========================================================================
-# 1. CONFIGURAÇÃO DA INTERFACE, AMBIENTE E BANCO LOCAL (OFFLINE)
+# 1. CONFIGURAÇÃO DA INTERFACE, AMBIENTE E ARQUIVO LOCAL (OFFLINE)
 # =========================================================================
 
 st.set_page_config(page_title="Ocorrências Em Trânsito", page_icon="🚌", layout="centered")
@@ -13,80 +14,98 @@ st.set_page_config(page_title="Ocorrências Em Trânsito", page_icon="🚌", lay
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-@st.cache_resource
-def init_supabase() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+SUPABASE_HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation"
+}
 
-supabase = init_supabase()
+# Caminho do arquivo de texto que guardará os registros offline no celular
+ARQUIVO_OFFLINE = "/data/fila_ocorrencias.json"
 
-# Inicialização do Banco de Dados SQLite Local Persistente no Celular
-def init_local_db():
-    conn = sqlite3.connect("/data/ocorrencias_offline.db", check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS fila_ocorrencias (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            prefixo_veiculo TEXT,
-            tipo TEXT,
-            descricao TEXT,
-            registrador TEXT,
-            foto_bytes_base64 TEXT,
-            data_registro TEXT
-        )
-    """)
-    conn.commit()
-    return conn
+def ler_ocorrencias_offline():
+    if not os.path.exists(ARQUIVO_OFFLINE):
+        return []
+    try:
+        with open(ARQUIVO_OFFLINE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
 
-conn_local = init_local_db()
+def salvar_ocorrencia_offline(dados):
+    lista = ler_ocorrencias_offline()
+    lista.append(dados)
+    try:
+        with open(ARQUIVO_OFFLINE, "w", encoding="utf-8") as f:
+            json.dump(lista, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        st.error(f"Erro ao salvar arquivo local: {e}")
 
-# NOVO: Função que descarrega os dados do celular para o Supabase quando há internet
+def atualizar_ocorrencias_offline(nova_lista):
+    try:
+        with open(ARQUIVO_OFFLINE, "w", encoding="utf-8") as f:
+            json.dump(nova_lista, f, ensure_ascii=False, indent=4)
+    except Exception:
+        pass
+
+def upload_foto_supabase(nome_arquivo, bytes_foto):
+    url = f"{SUPABASE_URL}/storage/v1/object/fotos-ocorrencias/{nome_arquivo}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "image/jpeg"
+    }
+    response = requests.post(url, headers=headers, data=bytes_foto)
+    if response.status_code not in [200, 201]:
+        raise Exception(f"Erro no upload da foto: {response.text}")
+    return f"{SUPABASE_URL}/storage/v1/object/public/fotos-ocorrencias/{nome_arquivo}"
+
 def sincronizar_dados_pendentes():
-    cursor_local = conn_local.cursor()
-    # Puxa tudo o que estiver guardado na fila offline
-    cursor_local.execute("SELECT id, prefixo_veiculo, tipo, descricao, registrador, foto_bytes_base64, data_registro FROM fila_ocorrencias")
-    registros_pendentes = cursor_local.fetchall()
+    registros_pendentes = ler_ocorrencias_offline()
     
     if registros_pendentes:
         status_placeholder = st.empty()
         status_placeholder.info(f"🔄 Conexão detectada! Sincronizando {len(registros_pendentes)} ocorrência(s) salvas offline...")
         
+        registros_restantes = []
         sucesso_total = True
         
         for item in registros_pendentes:
-            id_local, prefixo, tipo, descricao, registrador, foto_b64, timestamp = item
+            prefixo = item["prefixo_veiculo"]
+            tipo = item["tipo"]
+            descricao = item["descricao"]
+            registrador = item["registrador"]
+            foto_b64 = item["foto_bytes_base64"]
+            timestamp = item["data_registro"]
+            
             nome_do_arquivo = f"{prefixo}_{timestamp}_offline.jpg"
             
-            try:
-                # Decodifica o texto base64 de volta para os bytes da foto original
-                bytes_da_foto = base64.b64decode(foto_b64)
-                
-                # Envia a foto para o Storage do Supabase
-                supabase.storage.from_("fotos-ocorrencias").upload(
-                    path=nome_do_arquivo,
-                    file=bytes_da_foto,
-                    file_options={"content-type": "image/jpeg"}
-                )
-                
-                url_da_foto = supabase.storage.from_("fotos-ocorrencias").get_public_url(nome_do_arquivo)
-                
-                # Prepara e envia os dados textuais da ocorrência
-                dados_ocorrencia = {
-                    "prefixo_veiculo": str(prefixo), 
-                    "tipo": tipo,
-                    "descricao": f"[REGISTRO OFFLINE EM {timestamp}] {descricao}",
-                    "foto_url": url_da_foto,
-                    "registrador": str(registrador)
-                }
-                supabase.table("ocorrencias").insert(dados_ocorrencia).execute()
-                
-                # Se deu certo, deleta essa ocorrência específica da fila do celular
-                cursor_local.execute("DELETE FROM fila_ocorrencias WHERE id = ?", (id_local,))
-                conn_local.commit()
-                
-            except Exception:
-                # Se falhar no meio do caminho (ex: internet oscilou de novo), para e tenta o resto depois
-                sucesso_total = False
-                break
+            if sucesso_total:
+                try:
+                    bytes_da_foto = base64.b64decode(foto_b64)
+                    url_da_foto = upload_foto_supabase(nome_do_arquivo, bytes_da_foto)
+                    
+                    url_tabela = f"{SUPABASE_URL}/rest/v1/ocorrencias"
+                    dados_ocorrencia = {
+                        "prefixo_veiculo": str(prefixo), 
+                        "tipo": tipo,
+                        "descricao": f"[REGISTRO OFFLINE EM {timestamp}] {descricao}",
+                        "foto_url": url_da_foto,
+                        "registrador": str(registrador)
+                    }
+                    res = requests.post(url_tabela, headers=SUPABASE_HEADERS, json=dados_ocorrencia)
+                    if res.status_code not in [200, 201]:
+                        raise Exception()
+                except Exception:
+                    sucesso_total = False
+                    # Se falhar este item, guarda ele e os próximos de volta no arquivo
+                    registros_restantes.append(item)
+            else:
+                registros_restantes.append(item)
+        
+        # Atualiza o arquivo local apenas com o que sobrou (ou limpa se enviou tudo)
+        atualizar_ocorrencias_offline(registros_restantes)
         
         if sucesso_total:
             status_placeholder.success("✅ Todas as ocorrências offline foram sincronizadas com sucesso!")
@@ -106,7 +125,7 @@ if "nome_motorista" not in st.session_state:
     st.session_state.nome_motorista = ""       
 
 # =========================================================================
-# 3. MÓDULO DE AUTENTICAÇÃO (TELA DE LOGIN)
+# 3. MÓDULO DE AUTENTICAÇÃO (TELA DE LOGIN VIA HTTP REST)
 # =========================================================================
 
 if not st.session_state.logado:
@@ -125,35 +144,32 @@ if not st.session_state.logado:
         else:
             with st.spinner("Autenticando..."):
                 try:
-                    resposta_login = supabase.table("cadastro_login") \
-                        .select("*") \
-                        .eq("matricula", input_matricula) \
-                        .eq("cpf", input_cpf) \
-                        .execute()
-                    
-                    resultado = resposta_login.data
+                    url_login = f"{SUPABASE_URL}/rest/v1/cadastro_login?matricula=eq.{input_matricula}&cpf=eq.{input_cpf}"
+                    resposta_login = requests.get(url_login, headers=SUPABASE_HEADERS)
+                    resultado = resposta_login.json()
                     
                     if resultado and len(resultado) > 0:
                         nome_encontrado = f"Matrícula {input_matricula}" 
                         
-                        resposta_mot = supabase.table("motoristas") \
-                            .select("nome") \
-                            .eq("matricula", input_matricula) \
-                            .execute()
+                        url_mot = f"{SUPABASE_URL}/rest/v1/motoristas?matricula=eq.{input_matricula}&select=nome"
+                        resposta_mot = requests.get(url_mot, headers=SUPABASE_HEADERS)
+                        resultado_mot = resposta_mot.json()
                         
-                        if resposta_mot.data and len(resposta_mot.data) > 0:
-                            nome_encontrado = resposta_mot.data[0]["nome"]
+                        if resultado_mot and len(resultado_mot) > 0:
+                            username = resultado_mot[0]["nome"]
+                        else:
+                            username = f"Matrícula {input_matricula}"
                         
                         st.session_state.logado = True
                         st.session_state.matricula_usuario = input_matricula
-                        st.session_state.nome_motorista = nome_encontrado
+                        st.session_state.nome_motorista = username
                         
                         st.success("✅ Login efetuado com sucesso!")
                         st.rerun() 
                     else:
                         st.error("❌ Matrícula ou CPF incorretos. Tente novamente.")
-                except Exception as e:
-                    st.error(f"❌ Erro de conexão ou credenciais. Verifique sua internet: {e}")
+                except Exception:
+                    st.error(f"❌ Erro de conexão ou credenciais. Verifique sua internet.")
                     
     st.stop() 
 
@@ -161,22 +177,23 @@ if not st.session_state.logado:
 # 4. MÓDULO PRINCIPAL (FORMULÁRIO DE REGISTRO DE OCORRÊNCIAS)
 # =========================================================================
 
-# Tenta sincronizar registros que ficaram guardados no celular antes de desenhar a tela
 sincronizar_dados_pendentes()
 
 @st.cache_data(ttl=3600)
 def carregar_veiculos():
     try:
-        resposta = supabase.table("veiculos").select("prefixo").execute()
-        return [row["prefixo"] for row in resposta.data] if resposta.data else []
+        url = f"{SUPABASE_URL}/rest/v1/veiculos?select=prefixo"
+        resposta = requests.get(url, headers=SUPABASE_HEADERS)
+        return [row["prefixo"] for row in resposta.json()] if resposta.status_code == 200 else []
     except Exception:
         return []
 
 @st.cache_data(ttl=3600)
 def carregar_tipos_ocorrencia():
     try:
-        resposta = supabase.table("tipo_ocorrencia").select("nome").execute()
-        return [row["nome"] for row in resposta.data] if resposta.data else []
+        url = f"{SUPABASE_URL}/rest/v1/tipo_ocorrencia?select=nome"
+        resposta = requests.get(url, headers=SUPABASE_HEADERS)
+        return [row["nome"] for row in resposta.json()] if resposta.status_code == 200 else []
     except Exception:
         return []
 
@@ -201,9 +218,6 @@ lista_tipos = carregar_tipos_ocorrencia()
 if not lista_tipos:
     lista_tipos = ["Mecânica", "Batida/Sinistro", "Limpeza/Conservação", "Vandalismo", "Outros"]
 
-# -------------------------------------------------------------------------
-# CONSTRUÇÃO DO FORMULÁRIO VISUAL
-# -------------------------------------------------------------------------
 with st.form("form_ocorrencia", clear_on_submit=True):
     if lista_onibus:
         prefixo = st.selectbox("Selecione o Ônibus (Prefixo)", options=lista_onibus)
@@ -217,7 +231,7 @@ with st.form("form_ocorrencia", clear_on_submit=True):
     botao_enviar = st.form_submit_button("💾 Registrar Ocorrência", use_container_width=True)
 
 # =========================================================================
-# 5. PROCESSAMENTO E ENVIO DOS DADOS (MODIFICADO PARA SUPORTAR OFFLINE)
+# 5. PROCESSAMENTO E ENVIO DOS DADOS (SALVAMENTO LOCAL EM JSON SE OFFLINE)
 # =========================================================================
 if botao_enviar:
     if not prefixo or not descricao or not foto_arquivo:
@@ -230,16 +244,9 @@ if botao_enviar:
             bytes_da_foto = foto_arquivo.getvalue()
             
             try:
-                # TENTATIVA ONLINE: Envia foto para o Storage
-                supabase.storage.from_("fotos-ocorrencias").upload(
-                    path=nome_do_arquivo,
-                    file=bytes_da_foto,
-                    file_options={"content-type": "image/jpeg"}
-                )
+                url_da_foto = upload_foto_supabase(nome_do_arquivo, bytes_da_foto)
                 
-                url_da_foto = supabase.storage.from_("fotos-ocorrencias").get_public_url(nome_do_arquivo)
-                
-                # Envia dados para a Tabela
+                url_tabela = f"{SUPABASE_URL}/rest/v1/ocorrencias"
                 dados_ocorrencia = {
                     "prefixo_veiculo": str(prefixo), 
                     "tipo": tipo,
@@ -247,24 +254,25 @@ if botao_enviar:
                     "foto_url": url_da_foto,
                     "registrador": str(nome_registrador)
                 }
-                supabase.table("ocorrencias").insert(dados_ocorrencia).execute()
+                res = requests.post(url_tabela, headers=SUPABASE_HEADERS, json=dados_ocorrencia)
+                if res.status_code not in [200, 201]:
+                    raise Exception()
                 
                 st.success(f"✅ Ocorrência registrada ONLINE com sucesso por {nome_registrador}!")
                 st.balloons()
                 
-            except Exception as erro_rede:
-                # SE FALHAR (OFFLINE): Salva localmente no banco SQLite do celular
-                cursor_local = conn_local.cursor()
-                
-                # Transforma os bytes da foto em texto base64 para armazenar no SQLite de forma segura
+            except Exception:
+                # SE DER ERRO DE CONEXÃO: Salva em formato JSON no sistema de arquivos local persistido pelo stlite
                 foto_base64 = base64.b64encode(bytes_da_foto).decode("utf-8")
                 
-                cursor_local.execute("""
-                    INSERT INTO fila_ocorrencias 
-                    (prefixo_veiculo, tipo, descricao, registrador, foto_bytes_base64, data_registro)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (str(prefixo), tipo, descricao, str(nome_registrador), foto_base64, timestamp))
+                dados_offline = {
+                    "prefixo_veiculo": str(prefixo),
+                    "tipo": tipo,
+                    "descricao": descricao,
+                    "registrador": str(nome_registrador),
+                    "foto_bytes_base64": foto_base64,
+                    "data_registro": timestamp
+                }
                 
-                conn_local.commit()
-                
+                salvar_ocorrencia_offline(dados_offline)
                 st.warning("⚠️ Você está sem sinal de internet! A ocorrência foi salva localmente no seu celular e será enviada automaticamente assim que a conexão retornar.")
