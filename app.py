@@ -2,7 +2,7 @@ import streamlit as st
 from supabase import create_client, Client
 import datetime
 import sqlite3  # <- Controla o banco offline
-import base64   # <- Converte a foto em texto para salvar no celular
+import base64   # <- Transforma a foto em texto e vice-versa
 
 # =========================================================================
 # 1. CONFIGURAÇÃO DA INTERFACE, AMBIENTE E BANCO LOCAL (OFFLINE)
@@ -38,6 +38,61 @@ def init_local_db():
     return conn
 
 conn_local = init_local_db()
+
+# NOVO: Função que descarrega os dados do celular para o Supabase quando há internet
+def sincronizar_dados_pendentes():
+    cursor_local = conn_local.cursor()
+    # Puxa tudo o que estiver guardado na fila offline
+    cursor_local.execute("SELECT id, prefixo_veiculo, tipo, descricao, registrador, foto_bytes_base64, data_registro FROM fila_ocorrencias")
+    registros_pendentes = cursor_local.fetchall()
+    
+    if registros_pendentes:
+        status_placeholder = st.empty()
+        status_placeholder.info(f"🔄 Conexão detectada! Sincronizando {len(registros_pendentes)} ocorrência(s) salvas offline...")
+        
+        sucesso_total = True
+        
+        for item in registros_pendentes:
+            id_local, prefixo, tipo, descricao, registrador, foto_b64, timestamp = item
+            nome_do_arquivo = f"{prefixo}_{timestamp}_offline.jpg"
+            
+            try:
+                # Decodifica o texto base64 de volta para os bytes da foto original
+                bytes_da_foto = base64.b64decode(foto_b64)
+                
+                # Envia a foto para o Storage do Supabase
+                supabase.storage.from_("fotos-ocorrencias").upload(
+                    path=nome_do_arquivo,
+                    file=bytes_da_foto,
+                    file_options={"content-type": "image/jpeg"}
+                )
+                
+                url_da_foto = supabase.storage.from_("fotos-ocorrencias").get_public_url(nome_do_arquivo)
+                
+                # Prepara e envia os dados textuais da ocorrência
+                dados_ocorrencia = {
+                    "prefixo_veiculo": str(prefixo), 
+                    "tipo": tipo,
+                    "descricao": f"[REGISTRO OFFLINE EM {timestamp}] {descricao}",
+                    "foto_url": url_da_foto,
+                    "registrador": str(registrador)
+                }
+                supabase.table("ocorrencias").insert(dados_ocorrencia).execute()
+                
+                # Se deu certo, deleta essa ocorrência específica da fila do celular
+                cursor_local.execute("DELETE FROM fila_ocorrencias WHERE id = ?", (id_local,))
+                conn_local.commit()
+                
+            except Exception:
+                # Se falhar no meio do caminho (ex: internet oscilou de novo), para e tenta o resto depois
+                sucesso_total = False
+                break
+        
+        if sucesso_total:
+            status_placeholder.success("✅ Todas as ocorrências offline foram sincronizadas com sucesso!")
+            st.balloons()
+        else:
+            status_placeholder.warning("⚠️ Algumas ocorrências não puderam ser sincronizadas ainda. Tentaremos na próxima recarga.")
 
 # =========================================================================
 # 2. GESTÃO DE ESTADO DO OPERADOR (SESSION STATE)
@@ -98,8 +153,6 @@ if not st.session_state.logado:
                     else:
                         st.error("❌ Matrícula ou CPF incorretos. Tente novamente.")
                 except Exception as e:
-                    # NOTA: Em modo 100% offline inicial, o login vai falhar porque depende do Supabase. 
-                    # Se os motoristas já iniciarem o app sem internet, precisaremos de cache de login (futuro).
                     st.error(f"❌ Erro de conexão ou credenciais. Verifique sua internet: {e}")
                     
     st.stop() 
@@ -107,6 +160,9 @@ if not st.session_state.logado:
 # =========================================================================
 # 4. MÓDULO PRINCIPAL (FORMULÁRIO DE REGISTRO DE OCORRÊNCIAS)
 # =========================================================================
+
+# Tenta sincronizar registros que ficaram guardados no celular antes de desenhar a tela
+sincronizar_dados_pendentes()
 
 @st.cache_data(ttl=3600)
 def carregar_veiculos():
